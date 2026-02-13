@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>暗唱例文道場 第１章</title>
+<style>
+:root{
+  --bg:#f4f6f8;
+  --card:#ffffff;
+  --ink:#1f2937;
+  --muted:#6b7280;
+  --accent:#2c3e50;
+  --ok:#0f766e;
+  --ng:#b91c1c;
+  --shadow:0 2px 10px rgba(0,0,0,.08);
+}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+  background:var(--bg);
+  margin:0;
+}
+header{
+  background:var(--accent);
+  color:#fff;
+  padding:18px;
+  text-align:center;
+}
+.wrap{
+  max-width:860px;
+  margin:20px auto;
+  padding:0 12px;
+}
+.menu{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:10px;
+  margin-bottom:15px;
+}
+
+@media (min-width:720px){
+  .menu{
+    grid-template-columns:1fr 1fr;
+  }
+}
+
+.btn{
+  padding:14px;
+  border:none;
+  border-radius:10px;
+  background:#fff;
+  box-shadow:var(--shadow);
+  cursor:pointer;
+  text-align:left;
+}
+.card{
+  background:#fff;
+  padding:16px;
+  border-radius:12px;
+  box-shadow:var(--shadow);
+}
+.jp{
+  font-size:18px;
+  margin:12px 0;
+  white-space:pre-wrap;
+}
+.answer-area{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+input{
+  flex:1;
+  padding:12px;
+  font-size:16px;
+}
+.action{
+  padding:12px 14px;
+  background:var(--accent);
+  color:#fff;
+  border:none;
+  border-radius:8px;
+  cursor:pointer;
+}
+.result{
+  margin-top:10px;
+}
+.ok{color:var(--ok);}
+.ng{color:var(--ng);}
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:10px;
+}
+th,td{
+  border-bottom:1px solid #ddd;
+  padding:8px;
+}
+th{
+  background:#f3f4f6;
+  text-align:left;
+}
+</style>
+</head>
+<body>
+<header>
+<h1>暗唱例文道場　第１章</h1>
+</header>
+
+<div class="wrap">
+<div class="menu">
+<button id="btnSeq" class="btn"></button>
+<button id="btnRand" class="btn">全部ランダム</button>
+<button id="btnWrongRand" class="btn">誤答ランダム</button>
+<button id="btnStats" class="btn">学習記録</button>
+<button id="btnReset" class="btn">記録リセット</button>
+<button id="btnTop" class="btn">トップページ</button>
+</div>
+
+<div id="main" class="card"></div>
+</div>
+
+<script>
+(() => {
+
+const STORAGE_KEY = "AnshoReibun_Grammar_Ch1_v2";
+const PAGE_SIZE = 15;
+const TOP_URL = "https://daichig-sbmk.github.io/Ansho-Reibun-top/";
+let items = [];
+let byId = new Map();
+let session = null;
+
+function loadStore(){
+  return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{"stats":{},"seqIndex":0,"inProgress":{}}');
+}
+function saveStore(s){ localStorage.setItem(STORAGE_KEY,JSON.stringify(s)); }
+
+function statFor(store,id){
+  if(!store.stats[id]) store.stats[id]={wrong:0,seqShown:0,randShown:0};
+  return store.stats[id];
+}
+
+function normalize(s){
+  return s.normalize("NFKC")
+          .replace(/[’‘`]/g,"'")
+          .replace(/\s+/g," ")
+          .trim()
+          .toLowerCase();
+}
+
+async function loadData(){
+  const res=await fetch("grammar.csv",{cache:"no-store"});
+  const buf=await res.arrayBuffer();
+  let text;
+  try{text=new TextDecoder("utf-8",{fatal:true}).decode(buf);}
+  catch{text=new TextDecoder("shift-jis").decode(buf);}
+  if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+
+  const rows=text.split(/\r?\n/).filter(r=>r.trim());
+const delim = rows[0].includes("\t") ? "\t" : ",";
+
+function splitLine(line){
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++){
+    const c = line[i];
+
+    if (inQuotes){
+      if (c === '"'){
+        if (line[i + 1] === '"'){ cur += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        cur += c;
+      }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === delim){ out.push(cur); cur = ""; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+const header = splitLine(rows[0]).map(s => s.trim());
+  const idI=header.indexOf("id");
+  const jpI=header.indexOf("jp");
+  const mI=header.indexOf("model");
+  const aI=header.indexOf("alts");
+
+  for(let i=1;i<rows.length;i++){
+    const cols = splitLine(rows[i]);
+    if(!cols[idI]) continue;
+    const alts=(cols[aI]||"").split("|").filter(Boolean);
+    items.push({id:cols[idI],jp:cols[jpI],model:cols[mI],alts});
+  }
+  byId=new Map(items.map(x=>[x.id,x]));
+}
+
+function updateSeqLabel(){
+  const store=loadStore();
+  const per=Math.ceil(items.length/PAGE_SIZE);
+  const mid=store.inProgress?.seq?"（途中あり）":"";
+  document.getElementById("btnSeq").textContent=
+    `全部順番（${per}回で１周）${mid}`;
+}
+
+function startSeq(){
+  const store=loadStore();
+  if(store.inProgress?.seq){
+    session=store.inProgress.seq;
+    render();
+    return;
+  }
+  const start=store.seqIndex||0;
+  const selected=items.slice(start,start+PAGE_SIZE).map(x=>x.id);
+  store.inProgress={seq:{mode:"seq",ids:selected,idx:0}};
+  saveStore(store);
+  session=store.inProgress.seq;
+  render();
+}
+
+function commitSeq(){
+  const store=loadStore();
+  if(!store.inProgress?.seq) return;
+  const count=store.inProgress.seq.ids.length;
+  store.seqIndex=(store.seqIndex||0)+count;
+  if(store.seqIndex>=items.length) store.seqIndex=0;
+  store.inProgress.seq=null;
+  saveStore(store);
+}
+
+function startRand(){
+  const store=loadStore();
+  const stats=store.stats||{};
+  const pool=[...items];
+
+  pool.sort((a,b)=>{
+    const sa=stats[a.id]?.randShown||0;
+    const sb=stats[b.id]?.randShown||0;
+    if(sa!==sb) return sa-sb;
+    const wa=stats[a.id]?.wrong>0?0:1;
+    const wb=stats[b.id]?.wrong>0?0:1;
+    if(wa!==wb) return wa-wb;
+    return Math.random()-0.5;
+  });
+
+  const selected=pool.slice(0,Math.min(PAGE_SIZE,pool.length)).map(x=>x.id);
+
+  selected.forEach(id=>{
+    statFor(store,id).randShown++;
+  });
+  saveStore(store);
+
+  session={mode:"rand",ids:selected,idx:0};
+  render();
+}
+
+function render(){
+  const main=document.getElementById("main");
+  const q=byId.get(session.ids[session.idx]);
+  main.innerHTML=`
+  <div>進行状況：${session.idx+1}/${session.ids.length}</div>
+  <div class="jp">${q.jp}</div>
+  <div class="answer-area">
+    <input id="ans">
+    <button class="action" id="check">判定</button>
+  </div>
+  <div id="res" class="result"></div>
+  `;
+  document.getElementById("check").onclick=check;
+const ans = document.getElementById("ans");
+ans.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();   // ← ここを追加
+    document.getElementById("check").click();
+  }
+});
+setTimeout(() => ans.focus(), 0);
+}
+
+function check(){
+  const store=loadStore();
+  const id=session.ids[session.idx];
+  const q=byId.get(id);
+  const user=normalize(document.getElementById("ans").value);
+  const accept=[q.model,...q.alts].map(normalize);
+  const ok=accept.includes(user);
+  if(!ok && session.mode!=="wrongRand"){
+    statFor(store,id).wrong++;
+    saveStore(store);
+  }
+const altsText = (q.alts && q.alts.length)
+  ? `<div style="font-size:13px; color:#6b7280; margin-top:6px;">別解：${q.alts.join(" / ")}</div>`
+  : "";
+
+document.getElementById("res").innerHTML=
+  `<div class="${ok?"ok":"ng"}">${ok?"正解":"不正解"}</div>
+   <div>模範解答：${q.model}</div>
+   ${altsText}
+   <button class="action" id="nextBtn" onclick="nextQ()">次へ</button>`;
+
+const nextBtn = document.getElementById("nextBtn");
+
+// 今押したEnter（判定に使ったEnter）が「次へ」にも効かないように、次のイベントから有効化
+setTimeout(() => {
+  nextBtn.focus();
+  nextBtn.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      nextBtn.click();
+    }
+  }, { once: true });
+}, 0);
+}
+
+window.nextQ=function(){
+  session.idx++;
+  if(session.idx>=session.ids.length){
+    if(session.mode==="seq") commitSeq();
+    session=null;
+    document.getElementById("main").innerHTML="終了しました。";
+    updateSeqLabel();
+    return;
+  }
+  render();
+}
+
+function renderStats(){
+  const store=loadStore();
+  const rows=items
+    .map(x=>({jp:x.jp,model:x.model,wrong:store.stats[x.id]?.wrong||0}))
+    .filter(x=>x.wrong>0)
+    .sort((a,b)=>b.wrong-a.wrong);
+
+  if(rows.length===0){
+    document.getElementById("main").innerHTML="記録なし";
+    return;
+  }
+
+  document.getElementById("main").innerHTML=`
+  <table>
+  <tr><th>回</th><th>英語</th><th>日本語</th></tr>
+  ${rows.map(r=>`<tr><td>${r.wrong}</td><td>${r.model}</td><td>${r.jp}</td></tr>`).join("")}
+  </table>`;
+}
+
+document.getElementById("btnSeq").onclick=startSeq;
+document.getElementById("btnRand").onclick=startRand;
+document.getElementById("btnStats").onclick=renderStats;
+document.getElementById("btnReset").onclick=()=>{
+  if(confirm("このページの記録をすべてリセットしますか？")){
+    localStorage.removeItem(STORAGE_KEY);
+    location.reload();
+  }
+};
+document.getElementById("btnTop").onclick=()=>location.href=TOP_URL;
+
+(async function(){
+  await loadData();
+  updateSeqLabel();
+})();
+})();
+</script>
+</body>
+</html>
