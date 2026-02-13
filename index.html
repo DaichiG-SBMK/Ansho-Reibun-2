@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>暗唱例文道場 第１章</title>
+<title>暗唱例文道場 第２章 文の構造</title>
 <style>
 :root{
   --bg:#f4f6f8;
@@ -258,6 +258,51 @@ function startRand(){
   render();
 }
 
+function startWrongRand(){
+  const store = loadStore();
+
+  // wrong >= 1 の問題だけ集める
+  const pool = items.filter(x => (store.stats?.[x.id]?.wrong || 0) >= 1);
+
+  if (pool.length === 0) {
+    document.getElementById("main").innerHTML =
+      "学習記録に誤答がまだありません。まず「全部順番」または「全部ランダム」で間違えると出題されます。";
+    return;
+  }
+
+  // 優先：この形式での出題回数が少ない → 同じなら（誤答回数が多い順）→ その上でランダム
+  // ※あなたの最初の仕様に合わせるなら「誤答回数が多い順」を入れるのが自然なので入れてあります
+  // （もしここも「誤答経験あり優先＋ランダム」だけにしたいなら言ってください。すぐ変えます）
+  const randKey = new Map();
+  pool.forEach(x => randKey.set(x.id, Math.random()));
+
+  pool.sort((a,b)=>{
+    const sa = store.stats?.[a.id]?.wrongRandShown || 0;
+    const sb = store.stats?.[b.id]?.wrongRandShown || 0;
+    if (sa !== sb) return sa - sb;
+
+    const wa = store.stats?.[a.id]?.wrong || 0;
+    const wb = store.stats?.[b.id]?.wrong || 0;
+    if (wa !== wb) return wb - wa;
+
+    return (randKey.get(a.id) ?? 0) - (randKey.get(b.id) ?? 0);
+  });
+
+  const selected = pool.slice(0, Math.min(PAGE_SIZE, pool.length)).map(x => x.id);
+
+  // この形式の出題回数をカウント（学習記録wrongは増やさない）
+  selected.forEach(id => {
+    if (!store.stats) store.stats = {};
+    if (!store.stats[id]) store.stats[id] = { wrong:0, seqShown:0, randShown:0, wrongRandShown:0 };
+    if (typeof store.stats[id].wrongRandShown !== "number") store.stats[id].wrongRandShown = 0;
+    store.stats[id].wrongRandShown++;
+  });
+  saveStore(store);
+
+  session = { mode:"wrongRand", ids:selected, idx:0 };
+  render();
+}
+
 function render(){
   const main=document.getElementById("main");
   const q=byId.get(session.ids[session.idx]);
@@ -265,7 +310,11 @@ function render(){
   <div>進行状況：${session.idx+1}/${session.ids.length}</div>
   <div class="jp">${q.jp}</div>
   <div class="answer-area">
-    <input id="ans">
+    <input id="ans"
+       autocomplete="off"
+       autocorrect="off"
+       autocapitalize="off"
+       spellcheck="false">
     <button class="action" id="check">判定</button>
   </div>
   <div id="res" class="result"></div>
@@ -349,6 +398,7 @@ function renderStats(){
 
 document.getElementById("btnSeq").onclick=startSeq;
 document.getElementById("btnRand").onclick=startRand;
+document.getElementById("btnWrongRand").onclick = startWrongRand;
 document.getElementById("btnStats").onclick=renderStats;
 document.getElementById("btnReset").onclick=()=>{
   if(confirm("このページの記録をすべてリセットしますか？")){
